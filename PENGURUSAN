@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistem Tempahan Premis PPD</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- SDK Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  
+  <style>
+    @keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .animate-slide-up { animation: slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background-color: #f8fafc; }
+    select option:disabled { color: #f43f5e; font-style: italic; background-color: #fff1f2; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // ==========================================
+    // FIREBASE CONFIG ANDA
+    // ==========================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyBUH781Kd44vUbwljZWfu2Vm78iC9RCfhE",
+      authDomain: "sistem-tempahan-premis-ppdbp.firebaseapp.com",
+      projectId: "sistem-tempahan-premis-ppdbp",
+      storageBucket: "sistem-tempahan-premis-ppdbp.firebasestorage.app",
+      messagingSenderId: "817783322362",
+      appId: "1:817783322362:web:fd92cd275b40fb0d533b43",
+      measurementId: "G-FZZXRGM5QV"
+    };
+
+    // ==========================================
+    // TETAPAN TELEGRAM BOT
+    // Masukkan Token dan Chat ID anda di sini
+    // ==========================================
+    const TELEGRAM_BOT_TOKEN = '8834872879:AAF7dEyW5NW0zzCQN5oC6eu-oGQx2eBsPs0'; // Cth: '123456789:ABCdefGhIJK...'
+    const TELEGRAM_CHAT_ID = '-5582760295';     // Cth: '-1001234567890'
+
+    // Initialize Firebase
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.firestore();
+
+    const FACILITIES = [
+      { id: 'BMTS', name: 'Bilik Mesyuarat Taming Sari', capacity: 40 },
+      { id: 'DG', name: 'Dewan Gemilang', capacity: 80 },
+      { id: 'MK', name: 'Makmal Komputer', capacity: 25 },
+      { id: 'DTF', name: 'Dewan Tun Fatimah', capacity: 80 }
+    ];
+
+    const STATUS_COLORS = {
+      'Menunggu Kelulusan': 'bg-amber-100 text-amber-800 border-amber-200',
+      'Diluluskan': 'bg-cyan-100 text-cyan-800 border-cyan-300',
+      'Ditolak': 'bg-rose-100 text-rose-800 border-rose-200',
+      'Dibatalkan': 'bg-slate-100 text-slate-600 border-slate-200',
+      'Ditutup': 'bg-gray-800 text-gray-100 border-gray-900'
+    };
+
+    const TIME_SLOTS = [
+      '07:00', '08:00', '09:00', '10:00', '11:00', '12:00', 
+      '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', 
+      '19:00', '20:00', '21:00', '22:00', '23:00'
+    ];
+
+    const timeToMins = (time) => {
+      if (!time) return 0;
+      const parts = time.toString().split(':');
+      if (parts.length < 2) return 0;
+      return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    };
+
+    const formatMasa = (time) => {
+      const [h, m] = time.split(':');
+      const hour = parseInt(h);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const formattedHour = hour % 12 || 12;
+      return `${formattedHour}:${m} ${ampm}`;
+    };
+
+    const TelegramToast = ({ messages, removeMessage }) => (
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-3">
+        {messages.map(msg => (
+          <div key={msg.id} className="bg-slate-900 text-cyan-50 p-4 rounded-2xl shadow-[0_0_20px_rgba(6,182,212,0.3)] border border-cyan-500/30 w-80 flex flex-col animate-slide-up backdrop-blur-xl">
+            <div className="flex items-center gap-2 font-bold mb-2 border-b border-cyan-900 pb-2 text-cyan-400">
+              <i className="fas fa-database"></i> Mesej Pangkalan Data
+            </div>
+            <div className="text-sm whitespace-pre-line leading-relaxed">{msg.text}</div>
+            <button onClick={() => removeMessage(msg.id)} className="absolute top-3 right-3 text-cyan-600 hover:text-cyan-300 transition-colors">
+              <i className="fas fa-times"></i>
+            </button>
+          </div>
+        ))}
+      </div>
+    );
+
+    function App() {
+      const [isAuthenticated, setIsAuthenticated] = useState(false);
+      const [view, setView] = useState('user-dashboard'); 
+      const [role, setRole] = useState(''); 
+      const [sidebarOpen, setSidebarOpen] = useState(false);
+      const [currentUser, setCurrentUser] = useState({ nama: '', emel: '' });
+      
+      const [bookings, setBookings] = useState([]);
+      const [users, setUsers] = useState([]); 
+      const [auditLogs, setAuditLogs] = useState([]);
+      const [telegramMsgs, setTelegramMsgs] = useState([]);
+      
+      const [dialogConfig, setDialogConfig] = useState({ isOpen: false, type: '', id: null, title: '', message: '', action: null });
+
+      const isFirebaseConfigured = firebaseConfig.apiKey !== "SILA_MASUKKAN_API_KEY";
+
+      // BACA DATA REAL-TIME DARI FIREBASE FIRESTORE
+      useEffect(() => {
+        if (!isFirebaseConfigured) return;
+
+        const unsubBookings = db.collection("bookings").onSnapshot(snapshot => {
+          const bookingsData = snapshot.docs.map(doc => doc.data());
+          bookingsData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          setBookings(bookingsData);
+        }, err => console.error("Ralat Firebase Tempahan:", err));
+
+        const unsubUsers = db.collection("users").onSnapshot(snapshot => {
+          const usersData = snapshot.docs.map(doc => doc.data());
+          setUsers(usersData);
+        }, err => console.error("Ralat Firebase Pengguna:", err));
+
+        return () => {
+          unsubBookings();
+          unsubUsers();
+        };
+      }, []);
+
+      const sendRealTelegramNotification = async (message) => {
+        if (TELEGRAM_BOT_TOKEN === 'LETAK_TOKEN_BOT_DI_SINI' || TELEGRAM_BOT_TOKEN === '') return;
+        const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+        try {
+          await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: TELEGRAM_CHAT_ID,
+              text: message,
+              parse_mode: 'HTML'
+            })
+          });
+        } catch (err) {
+          console.error("Gagal hantar notis ke Telegram:", err);
+        }
+      };
+
+      const sendTelegramMsg = (text) => {
+        const newMsg = { id: Date.now(), text };
+        setTelegramMsgs(prev => [...prev, newMsg]);
+        setTimeout(() => setTelegramMsgs(prev => prev.filter(m => m.id !== newMsg.id)), 8000); 
+      };
+
+      const addAuditLog = (action, details) => {
+        setAuditLogs(prev => [{ id: Date.now(), timestamp: new Date().toLocaleString('ms-MY'), user: currentUser.nama || 'Sistem', action, details }, ...prev]);
+      };
+
+      const showDialog = (config) => setDialogConfig({ isOpen: true, ...config });
+      const closeDialog = () => setDialogConfig({ isOpen: false, type: '', id: null, title: '', message: '', action: null });
+
+      const handleLogout = () => { setIsAuthenticated(false); setRole(''); };
+
+      const checkOverlap = (premis, tarikh, mula, tamat) => {
+        const newStart = timeToMins(mula);
+        const newEnd = timeToMins(tamat);
+        return bookings.some(b => {
+          if (b.premis !== premis || b.tarikh !== tarikh) return false;
+          if (b.status === 'Ditolak' || b.status === 'Dibatalkan') return false;
+          const bStart = timeToMins(b.masaMula);
+          const bEnd = timeToMins(b.masaTamat);
+          return (newStart < bEnd) && (newEnd > bStart);
+        });
+      };
+
+      const submitBooking = async (formData) => {
+        if (!isFirebaseConfigured) {
+          showDialog({ type: 'alert', title: 'Firebase Tidak Ditetapkan', message: 'Sila masukkan kod Firebase Config anda untuk menyimpan data.' });
+          return false;
+        }
+
+        if (checkOverlap(formData.premis, formData.tarikh, formData.masaMula, formData.masaTamat)) {
+          showDialog({ type: 'alert', title: 'Pertindihan Jadual Dikesan', message: 'RALAT: Premis tersebut telah ditempah pada slot masa tersebut. Sila ubah masa atau pilih premis lain.' });
+          return false;
+        }
+
+        const newId = `B${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+        const newBooking = {
+          ...formData, id: newId,
+          status: 'Menunggu Kelulusan', timestamp: new Date().toISOString()
+        };
+
+        try {
+          await db.collection("bookings").doc(newId).set(newBooking);
+          addAuditLog('Tempahan Baharu', `Tempahan ${newBooking.id} direkodkan`);
+          sendTelegramMsg(`🔔 TEMPAHAN BAHARU\nNama: ${formData.namaPemohon}\nTarikh: ${formData.tarikh}\nMasa: ${formData.masaMula} - ${formData.masaTamat}\nStatus: Menunggu`);
+          
+          // Hantar Notifikasi ke Bot Telegram Sebenar
+          const premisName = FACILITIES.find(f=>f.id===formData.premis)?.name;
+          sendRealTelegramNotification(`🔔 <b>PERMOHONAN PREMIS BAHARU</b> 🔔\n\n<b>Pemohon:</b> ${formData.namaPemohon} (${formData.organisasi})\n<b>Premis:</b> ${premisName}\n<b>Tarikh:</b> ${formData.tarikh}\n<b>Masa:</b> ${formatMasa(formData.masaMula)} - ${formatMasa(formData.masaTamat)}\n<b>Tujuan:</b> ${formData.tujuan}\n\n<i>Sila log masuk ke sistem untuk tindakan kelulusan.</i>`);
+
+          showDialog({
+            type: 'alert', title: 'Permohonan Berjaya', message: 'Tempahan anda telah disimpan ke dalam Firebase secara rasmi.',
+            action: () => setView(role === 'admin' ? 'admin-list' : 'user-dashboard')
+          });
+          return true;
+        } catch (error) {
+          console.error("Gagal simpan Firebase:", error);
+          showDialog({ type: 'alert', title: 'Ralat Penyimpanan', message: 'Terdapat ralat semasa menyimpan data ke Firebase.' });
+          return false;
+        }
+      };
+
+      const updateBookingStatus = async (id, newStatus, catatanAdmin = '') => {
+        try {
+          await db.collection("bookings").doc(id).update({
+            status: newStatus,
+            catatanAdmin: catatanAdmin
+          });
+          addAuditLog(`Kemaskini: ${newStatus}`, `ID: ${id} dikemaskini.`);
+
+          // --- FUNGSI WHATSAPP KEPADA PEMOHON ---
+          if (newStatus === 'Ditolak' || newStatus === 'Dibatalkan') {
+            const booking = bookings.find(b => b.id === id);
+            if (booking && booking.noTelefon) {
+              // Tukar format no telefon dari "012-3456789" kepada "60123456789" untuk WhatsApp
+              let phone = booking.noTelefon.replace(/[^0-9]/g, '');
+              if (phone.startsWith('0')) phone = '6' + phone;
+
+              const premisName = FACILITIES.find(f => f.id === booking.premis)?.name || booking.premis;
+              
+              // Bina ayat rasmi WhatsApp
+              const mesejWhatsApp = `*MAKLUMAN SISTEM TEMPAHAN PPD*\n\nSalam sejahtera *${booking.namaPemohon}*,\n\nDukacita dimaklumkan bahawa permohonan tempahan premis anda telah *${newStatus.toUpperCase()}*.\n\n*Butiran Tempahan:*\n🏢 Premis: ${premisName}\n📅 Tarikh: ${booking.tarikh}\n⏰ Masa: ${formatMasa(booking.masaMula)} - ${formatMasa(booking.masaTamat)}\n\n*Catatan/Alasan Pentadbir:*\n_"${catatanAdmin}"_\n\nHarap maklum, terima kasih.`;
+
+              // Buka tab baharu terus ke WhatsApp pemohon
+              window.open(`https://wa.me/${phone}?text=${encodeURIComponent(mesejWhatsApp)}`, '_blank');
+            }
+          }
+          // ---------------------------------------
+
+        } catch (err) {
+          console.error("Ralat Kemaskini Firebase:", err);
+        }
+        closeDialog();
+      };
+
+      const LoginScreen = () => {
+        const [isRegistering, setIsRegistering] = useState(false);
+        const [id, setId] = useState('');
+        const [pass, setPass] = useState('');
+        const [passConfirm, setPassConfirm] = useState('');
+        const [namaLengkap, setNamaLengkap] = useState('');
+        const [isWargaPPD, setIsWargaPPD] = useState('');
+        const [err, setErr] = useState('');
+        const [successMsg, setSuccessMsg] = useState('');
+        const [showPass, setShowPass] = useState(false);
+        const [showConfirmPass, setShowConfirmPass] = useState(false);
+
+        const handleLogin = (e) => {
+          e.preventDefault();
+          setErr(''); setSuccessMsg('');
+          const semakId = id.trim().toUpperCase();
+          const semakPass = pass.trim();
+
+          if ((semakId === 'NADHIRAH' && semakPass === '4181') || (semakId === 'FAIZUL' && semakPass === '4071') || (semakId === 'ADMIN' && semakPass === 'admin123') || (semakId === "S'ALEH" && semakPass === '5813')) {
+            setIsAuthenticated(true); setRole('admin'); setView('admin-dashboard');
+            setCurrentUser({ nama: `${semakId} (Pentadbir)`, emel: `${semakId.toLowerCase().replace("'", "")}@ppd.gov.my` });
+            return;
+          } 
+
+          const foundUser = users.find(u => u.id.toUpperCase() === semakId && u.pass === semakPass);
+          if (foundUser) {
+            setIsAuthenticated(true); setRole('user'); setView('form');
+            setCurrentUser({ nama: foundUser.nama, emel: foundUser.emel });
+          } else {
+            setErr('Emel Pengguna atau Kata Laluan yang dimasukkan tidak sah. Sila pastikan anda telah mendaftar.');
+          }
+        };
+
+        const handleRegister = async (e) => {
+          e.preventDefault();
+          setErr(''); setSuccessMsg('');
+          
+          if (!isFirebaseConfigured) {
+             setErr('Firebase Config belum diletakkan. Sila kemas kini kod sumber.'); return;
+          }
+
+          if (isWargaPPD === 'tidak') {
+            setErr('Pendaftaran Ditolak: Sistem ini dikhaskan untuk warga PPD Bangsar/Pudu sahaja.');
+            return;
+          }
+          if (isWargaPPD === '') {
+            setErr('Sila sahkan status tempat bertugas anda.');
+            return;
+          }
+
+          const semakId = id.trim().toLowerCase();
+
+          if (!semakId.endsWith('@moe.gov.my')) {
+            setErr('Ralat: Sila gunakan e-mel rasmi @moe.gov.my untuk mendaftar.');
+            return;
+          }
+
+          if (pass !== passConfirm) {
+            setErr('Ralat: Kata laluan dan pengesahan kata laluan tidak sepadan.');
+            return;
+          }
+
+          const exists = users.find(u => u.id.toLowerCase() === semakId) || ['nadhirah', 'faizul', 'admin', "s'aleh"].includes(semakId);
+          if (exists) {
+            setErr('Ralat: Emel ini telah didaftarkan dalam sistem. Sila terus Log Masuk.');
+            return;
+          }
+
+          const newUser = { id: semakId, pass: pass.trim(), nama: namaLengkap, emel: semakId, tarikhDaftar: new Date().toISOString().split('T')[0] };
+
+          try {
+            await db.collection("users").doc(semakId).set(newUser);
+            setSuccessMsg('Pendaftaran berjaya! Sila log masuk menggunakan E-mel & Kata Laluan anda.');
+            setIsRegistering(false);
+            setId(''); setPass(''); setPassConfirm(''); setNamaLengkap(''); setIsWargaPPD('');
+            setShowPass(false); setShowConfirmPass(false);
+          } catch (err) {
+            setErr('Ralat Firebase: ' + err.message);
+          }
+        };
+
+        return (
+          <div className="min-h-screen bg-[#070f1a] flex flex-col justify-center py-12 px-4 relative overflow-hidden">
+            <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-cyan-600 rounded-full mix-blend-screen filter blur-[120px] opacity-20 animate-pulse"></div>
+            <div className="absolute bottom-[-10%] right-[-10%] w-[30rem] h-[30rem] bg-teal-500 rounded-full mix-blend-screen filter blur-[120px] opacity-20"></div>
+            <div className="absolute top-[40%] left-[60%] w-64 h-64 bg-blue-600 rounded-full mix-blend-screen filter blur-[100px] opacity-20"></div>
+            
+            <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+              <div className="bg-white/95 backdrop-blur-2xl py-10 px-6 sm:px-10 shadow-[0_0_50px_rgba(6,182,212,0.15)] rounded-[2rem] border border-cyan-100/50">
+                <div className="flex justify-center mb-8">
+                  <img src="https://i.postimg.cc/4NcXx1NT/LOGO-PPDBP-FONT-HITAM.png" alt="Logo PPD" className="w-full max-w-[280px] sm:max-w-[320px] h-auto drop-shadow-lg hover:scale-105 transition-transform duration-500 object-contain"/>
+                </div>
+                <div className="text-center mb-8">
+                  <h1 className="text-2xl sm:text-3xl font-black bg-clip-text text-transparent bg-gradient-to-r from-teal-700 to-cyan-700 tracking-tight uppercase">Sistem Tempahan</h1>
+                  <p className="text-sm text-slate-500 mt-2 font-medium">Pejabat Pendidikan Daerah Bangsar/Pudu</p>
+                  <div className="flex items-center justify-center gap-4 text-gray-300 mt-6">
+                    <div className="h-px bg-gradient-to-r from-transparent to-cyan-200 w-full"></div>
+                    <span className="whitespace-nowrap text-xs font-bold uppercase tracking-widest text-cyan-600 flex items-center gap-1">
+                      {isRegistering ? <><i className="fas fa-user-plus mr-1"></i> Pendaftaran Warga Dalaman</> : <><i className="fas fa-magic mr-1"></i> Gerbang Akses</>}
+                    </span>
+                    <div className="h-px bg-gradient-to-l from-transparent to-cyan-200 w-full"></div>
+                  </div>
+                </div>
+
+                <form className="space-y-5" onSubmit={isRegistering ? handleRegister : handleLogin}>
+                  {err && <div className="bg-rose-50/80 p-3 text-rose-600 text-sm rounded-xl border border-rose-200 flex items-start gap-2 backdrop-blur-sm"><i className="fas fa-exclamation-circle mt-0.5 shrink-0"></i> <span>{err}</span></div>}
+                  {successMsg && <div className="bg-teal-50/80 p-3 text-teal-700 text-sm rounded-xl border border-teal-200 flex items-start gap-2 backdrop-blur-sm"><i className="fas fa-check-circle mt-0.5 shrink-0"></i> <span>{successMsg}</span></div>}
+                  
+                  {isRegistering && (
+                    <>
+                      <div className="bg-blue-50/80 border border-blue-200 text-blue-700 p-3 rounded-xl text-xs flex gap-2 items-start backdrop-blur-sm">
+                        <i className="fas fa-info-circle mt-0.5"></i>
+                        <span>Pendaftaran terhad kepada warga <b>PPD Bangsar/Pudu</b> yang mempunyai e-mel rasmi <b>@moe.gov.my</b> sahaja.</span>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">Nama Penuh</label>
+                        <input type="text" required value={namaLengkap} onChange={e=>setNamaLengkap(e.target.value)} className="block w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/40 focus:border-cyan-500 sm:text-sm transition-all" placeholder="Nama penuh pemohon" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">Tempat Bertugas</label>
+                        <select required value={isWargaPPD} onChange={e=>setIsWargaPPD(e.target.value)} className="block w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/40 focus:border-cyan-500 sm:text-sm transition-all">
+                          <option value="" disabled>Adakah anda warga PPD Bangsar/Pudu?</option>
+                          <option value="ya">Ya, saya warga PPD Bangsar/Pudu</option>
+                          <option value="tidak">Tidak, saya dari institusi lain</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">{isRegistering ? 'Emel Rasmi MOE (ID Pengguna)' : 'ID Pengguna'}</label>
+                    <input type="text" required value={id} onChange={e=>setId(e.target.value)} className="block w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/40 focus:border-cyan-500 sm:text-sm transition-all" placeholder={isRegistering ? "contoh@moe.gov.my" : "Masukkan ID anda"} />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">{isRegistering ? 'Cipta Kata Laluan' : 'Kata Laluan'}</label>
+                    <div className="relative">
+                      <input type={showPass ? "text" : "password"} required value={pass} onChange={e=>setPass(e.target.value)} className="block w-full pl-4 pr-12 py-3 bg-slate-50/50 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/40 focus:border-cyan-500 sm:text-sm transition-all" placeholder="••••••••" />
+                      <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-cyan-600 transition-colors focus:outline-none p-1">
+                        {showPass ? <i className="fas fa-eye-slash"></i> : <i className="fas fa-eye"></i>}
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {isRegistering && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1">Sahkan Kata Laluan</label>
+                      <div className="relative">
+                        <input type={showConfirmPass ? "text" : "password"} required value={passConfirm} onChange={e=>setPassConfirm(e.target.value)} className="block w-full pl-4 pr-12 py-3 bg-slate-50/50 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/40 focus:border-cyan-500 sm:text-sm transition-all" placeholder="••••••••" />
+                        <button type="button" onClick={() => setShowConfirmPass(!showConfirmPass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-cyan-600 transition-colors focus:outline-none p-1">
+                          {showConfirmPass ? <i className="fas fa-eye-slash"></i> : <i className="fas fa-eye"></i>}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-2">
+                    <button type="submit" className="w-full flex justify-center items-center gap-2 py-3.5 px-4 rounded-xl shadow-[0_10px_20px_-10px_rgba(6,182,212,0.5)] text-sm font-bold text-white bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cyan-500 transition-all duration-300 transform hover:-translate-y-0.5">
+                      {isRegistering ? 'Daftar Akaun Baharu' : 'Log Masuk Sistem'} <i className="fas fa-chevron-right ml-1"></i>
+                    </button>
+                  </div>
+                </form>
+
+                <div className="mt-6 text-center">
+                  <button type="button" onClick={() => { setIsRegistering(!isRegistering); setErr(''); setSuccessMsg(''); setId(''); setPass(''); setPassConfirm(''); setIsWargaPPD(''); setShowPass(false); setShowConfirmPass(false); }} className="text-sm font-bold text-cyan-600 hover:text-cyan-800 transition-colors">
+                    {isRegistering ? 'Sudah ada akaun? Log masuk ke sini' : 'Belum berdaftar? Daftar pengguna baharu'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const BookingForm = () => {
+        const [form, setForm] = useState({
+          namaPemohon: currentUser.nama && currentUser.nama !== 'Pemohon Awam' ? currentUser.nama : '', 
+          noTelefon: '', emel: currentUser.emel && currentUser.emel !== 'pengguna@gmail.com' ? currentUser.emel : '', 
+          jawatan: '', organisasi: '', premis: 'BMTS', tujuan: '', tarikh: '', masaMula: '', masaTamat: '', bilPeserta: '', catatan: ''
+        });
+
+        const handleChange = (e) => {
+          if(e.target.name === 'masaMula') setForm({...form, masaMula: e.target.value, masaTamat: ''});
+          else setForm({...form, [e.target.name]: e.target.value});
+        };
+
+        const handleSubmit = (e) => {
+          e.preventDefault();
+          const requiredFields = ['namaPemohon', 'noTelefon', 'emel', 'jawatan', 'organisasi', 'premis', 'tujuan', 'tarikh', 'masaMula', 'masaTamat', 'bilPeserta'];
+          const isAnyEmpty = requiredFields.some(field => !form[field] || form[field].toString().trim() === '');
+          
+          if (isAnyEmpty) {
+            showDialog({ type: 'alert', title: 'Borang Tidak Lengkap', message: 'Sila pastikan semua ruang wajib telah diisi dengan lengkap sebelum menghantar permohonan. (Kecuali Catatan Tambahan)'});
+            return;
+          }
+
+          if(timeToMins(form.masaMula) >= timeToMins(form.masaTamat)) {
+            showDialog({ type: 'alert', title: 'Ralat Masa', message: 'Masa tamat mesti direkodkan selepas masa mula.'});
+            return;
+          }
+          submitBooking(form);
+        };
+
+        const getBookedSlots = () => {
+          if (!form.premis || !form.tarikh) return [];
+          let booked = [];
+          bookings.forEach(b => {
+            if (b.premis === form.premis && b.tarikh === form.tarikh && (b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup')) {
+              const startMins = timeToMins(b.masaMula);
+              const endMins = timeToMins(b.masaTamat);
+              TIME_SLOTS.forEach(t => {
+                const tMins = timeToMins(t);
+                if (tMins >= startMins && tMins < endMins) booked.push(t);
+              });
+            }
+          });
+          return booked;
+        };
+        const bookedTimeSlots = getBookedSlots();
+
+        const isTamatDisabled = (t) => {
+          const tMins = timeToMins(t);
+          const mulaMins = timeToMins(form.masaMula);
+          if (!form.masaMula) return false;
+          if (tMins <= mulaMins) return true; 
+          
+          let overlapping = false;
+          bookings.forEach(b => {
+            if (b.premis === form.premis && b.tarikh === form.tarikh && (b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup')) {
+              const bStart = timeToMins(b.masaMula);
+              const bEnd = timeToMins(b.masaTamat);
+              if (mulaMins < bEnd && tMins > bStart) overlapping = true;
+            }
+          });
+          return overlapping;
+        };
+
+        return (
+          <div className="bg-white rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-6 md:p-8 max-w-4xl mx-auto relative overflow-hidden border border-slate-100">
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-teal-400 via-cyan-500 to-blue-500"></div>
+            <h2 className="text-2xl font-black text-slate-800 mb-8 flex items-center gap-3">
+              <div className="p-2 bg-cyan-50 rounded-lg text-cyan-600"><i className="fas fa-file-alt text-xl"></i></div>
+              Borang Permohonan Premis
+            </h2>
+            <form onSubmit={handleSubmit} className="space-y-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-5">
+                  <h3 className="text-sm font-bold text-cyan-700 uppercase tracking-wider flex items-center gap-2 border-b border-cyan-100 pb-2"><i className="fas fa-user"></i> Maklumat Pemohon</h3>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Nama Penuh</label><input required type="text" name="namaPemohon" value={form.namaPemohon} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">No. Telefon</label><input required type="tel" name="noTelefon" value={form.noTelefon} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Alamat Emel</label><input required type="email" name="emel" value={form.emel} readOnly className="w-full rounded-xl bg-slate-100 text-slate-500 border-slate-200 p-2.5 text-sm cursor-not-allowed" /></div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Jawatan</label><input required type="text" name="jawatan" value={form.jawatan} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Unit/Sektor</label><input required type="text" name="organisasi" value={form.organisasi} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                </div>
+
+                <div className="space-y-5">
+                  <h3 className="text-sm font-bold text-cyan-700 uppercase tracking-wider flex items-center gap-2 border-b border-cyan-100 pb-2"><i className="fas fa-calendar-alt"></i> Butiran Tempahan</h3>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Premis Dipohon</label>
+                    <select required name="premis" value={form.premis} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all">
+                      {FACILITIES.map(f => <option key={f.id} value={f.id}>{f.name} (Kapasiti: {f.capacity})</option>)}
+                    </select>
+                  </div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Tujuan Penggunaan</label><textarea required name="tujuan" value={form.tujuan} rows="2" onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all"></textarea></div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Tempahan</label><input required type="date" name="tarikh" value={form.tarikh} min={new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Masa Mula</label>
+                      <select required name="masaMula" value={form.masaMula} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all">
+                        <option value="" disabled>Pilih Jam</option>
+                        {TIME_SLOTS.map(t => {
+                           const isBooked = bookedTimeSlots.includes(t);
+                           return <option key={t} value={t} disabled={isBooked}>{formatMasa(t)} {isBooked ? '(Penuh)' : ''}</option>;
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Masa Tamat</label>
+                      <select required name="masaTamat" value={form.masaTamat} onChange={handleChange} disabled={!form.masaMula} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all disabled:opacity-50">
+                        <option value="" disabled>Pilih Jam</option>
+                        {TIME_SLOTS.map(t => {
+                           const isDisabled = isTamatDisabled(t);
+                           return <option key={t} value={t} disabled={isDisabled}>{formatMasa(t)} {isDisabled && timeToMins(t) > timeToMins(form.masaMula||'24:00') ? '(Bertindih)' : ''}</option>;
+                        })}
+                      </select>
+                    </div>
+                  </div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Anggaran Peserta</label><input required type="number" name="bilPeserta" value={form.bilPeserta} min="1" onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Catatan Tambahan</label><textarea name="catatan" value={form.catatan} rows="2" onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" placeholder="Kosongkan jika tiada"></textarea></div>
+                </div>
+              </div>
+              <div className="flex justify-end pt-6 border-t border-slate-100">
+                <button type="button" onClick={() => setView(role === 'admin' ? 'admin-dashboard' : 'user-dashboard')} className="mr-4 px-6 py-2.5 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors">Batal</button>
+                <button type="submit" className="px-8 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-xl hover:from-teal-400 hover:to-cyan-400 shadow-[0_8px_15px_-3px_rgba(6,182,212,0.4)] text-sm font-bold flex items-center gap-2 transform transition hover:-translate-y-0.5">
+                  <i className="fas fa-check-circle"></i> Hantar Permohonan
+                </button>
+              </div>
+            </form>
+          </div>
+        );
+      };
+
+      const AdminBlockForm = () => {
+        const [form, setForm] = useState({
+          premis: 'BMTS', tarikh: '', sepenuhHari: false, masaMula: '', masaTamat: '', catatan: ''
+        });
+
+        const handleChange = (e) => {
+          const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+          if (e.target.name === 'sepenuhHari' && value) {
+             setForm({...form, sepenuhHari: value, masaMula: '07:00', masaTamat: '23:00'});
+          } else {
+             setForm({...form, [e.target.name]: value});
+          }
+        };
+
+        const handleSubmit = async (e) => {
+          e.preventDefault();
+          let mMula = form.sepenuhHari ? '07:00' : form.masaMula;
+          let mTamat = form.sepenuhHari ? '23:00' : form.masaTamat;
+
+          if (!form.tarikh || !mMula || !mTamat) {
+            showDialog({ type: 'alert', title: 'Maklumat Tidak Lengkap', message: 'Sila lengkapkan pilihan tarikh dan masa sekatan.'});
+            return;
+          }
+
+          if(timeToMins(mMula) >= timeToMins(mTamat)) {
+            showDialog({ type: 'alert', title: 'Ralat Masa', message: 'Masa tamat mesti direkodkan selepas masa mula.'});
+            return;
+          }
+
+          if (checkOverlap(form.premis, form.tarikh, mMula, mTamat)) {
+            showDialog({ type: 'alert', title: 'Pertindihan Jadual Dikesan', message: 'Terdapat tempahan yang telah wujud pada slot masa ini. Sila gantung/batalkan tempahan sedia ada sebelum menyekat slot.' });
+            return;
+          }
+
+          const newId = `BLK${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+          const newBooking = {
+            id: newId,
+            namaPemohon: 'PENTADBIR (SISTEM)', noTelefon: '-', emel: currentUser.emel,
+            jawatan: 'Sistem Kawalan', organisasi: 'PPD Bangsar/Pudu',
+            premis: form.premis, tujuan: 'Sekatan Pentadbir (Blok)', tarikh: form.tarikh,
+            masaMula: mMula, masaTamat: mTamat, bilPeserta: 0,
+            catatan: form.catatan || 'Ditutup oleh Pentadbir', status: 'Ditutup', timestamp: new Date().toISOString()
+          };
+
+          try {
+            await db.collection("bookings").doc(newId).set(newBooking);
+            addAuditLog('Sekatan Premis', `Premis ${form.premis} disekat pada ${form.tarikh}`);
+            showDialog({
+              type: 'alert', title: 'Sekatan Berjaya', message: 'Premis telah berjaya disekat dan dihalang daripada sebarang tempahan umum untuk slot masa yang dipilih.',
+              action: () => setView('admin-list')
+            });
+          } catch (error) {
+            console.error("Gagal simpan sekatan:", error);
+            showDialog({ type: 'alert', title: 'Ralat Firebase', message: 'Tidak dapat menyimpan sekatan ke pelayan.' });
+          }
+        };
+
+        return (
+          <div className="bg-white rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-6 md:p-8 max-w-4xl mx-auto relative overflow-hidden border border-slate-100">
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gray-800"></div>
+            <h2 className="text-2xl font-black text-slate-800 mb-8 flex items-center gap-3">
+              <div className="p-2 bg-gray-100 rounded-lg text-gray-800"><i className="fas fa-lock text-xl"></i></div>
+              Sekatan Premis (Admin Block)
+            </h2>
+            
+            <div className="bg-rose-50 border border-rose-200 text-rose-700 p-4 rounded-xl mb-6 text-sm flex items-start gap-3">
+              <i className="fas fa-exclamation-triangle mt-0.5"></i>
+              <p>Ruangan ini membenarkan pentadbir menyekat terus mana-mana premis daripada ditempah oleh pengguna awam. Pastikan tiada tempahan aktif pada slot waktu yang ingin disekat.</p>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Premis Untuk Disekat</label>
+                    <select required name="premis" value={form.premis} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all">
+                      {FACILITIES.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Sekatan</label>
+                    <input required type="date" name="tarikh" value={form.tarikh} min={new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all" />
+                  </div>
+                </div>
+
+                <div className="space-y-5">
+                  <div className="flex items-center gap-2 mb-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                     <input type="checkbox" id="sepenuhHari" name="sepenuhHari" checked={form.sepenuhHari} onChange={handleChange} className="w-4 h-4 text-gray-800 bg-white border-gray-300 rounded focus:ring-gray-800 focus:ring-2" />
+                     <label htmlFor="sepenuhHari" className="text-sm font-bold text-slate-700 cursor-pointer">Sekat Sepenuh Hari (07:00 AM - 11:00 PM)</label>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Masa Mula</label>
+                      <select required name="masaMula" value={form.masaMula} onChange={handleChange} disabled={form.sepenuhHari} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all disabled:opacity-50">
+                        <option value="" disabled>Pilih Jam</option>
+                        {TIME_SLOTS.map(t => <option key={t} value={t}>{formatMasa(t)}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 mb-1">Masa Tamat</label>
+                      <select required name="masaTamat" value={form.masaTamat} onChange={handleChange} disabled={form.sepenuhHari} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all disabled:opacity-50">
+                        <option value="" disabled>Pilih Jam</option>
+                        {TIME_SLOTS.map(t => <option key={t} value={t}>{formatMasa(t)}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Catatan / Sebab Sekatan (Pilihan)</label><textarea name="catatan" value={form.catatan} rows="2" onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all" placeholder="Contoh: Penyelenggaraan / Arahan Pengarah"></textarea></div>
+                </div>
+              </div>
+              
+              <div className="flex justify-end pt-6 border-t border-slate-100 mt-6">
+                <button type="submit" className="px-8 py-2.5 bg-gray-800 text-white rounded-xl hover:bg-gray-700 shadow-md text-sm font-bold flex items-center gap-2 transform transition hover:-translate-y-0.5">
+                  <i className="fas fa-lock"></i> Aktifkan Sekatan
+                </button>
+              </div>
+            </form>
+          </div>
+        );
+      };
+
+      const DashboardUser = () => {
+        const myBookings = bookings; 
+        const stats = {
+          total: myBookings.length, pending: myBookings.filter(b => b.status === 'Menunggu Kelulusan').length,
+          upcoming: myBookings.filter(b => b.status === 'Diluluskan' && new Date(b.tarikh) >= new Date()).length,
+          cancelled: myBookings.filter(b => b.status === 'Dibatalkan' || b.status === 'Ditolak').length
+        };
+
+        return (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-black text-slate-800">Papan Pemuka Global</h2>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group hover:shadow-md transition-shadow">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-slate-400"></div>
+                <div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Jumlah Keseluruhan</p><p className="text-4xl font-black text-slate-800">{stats.total}</p></div>
+                <i className="fas fa-file-alt absolute bottom-4 right-4 text-slate-100 text-5xl group-hover:scale-110 transition-transform"></i>
+              </div>
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group hover:shadow-md transition-shadow">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-400"></div>
+                <div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Menunggu Kelulusan</p><p className="text-4xl font-black text-slate-800">{stats.pending}</p></div>
+                <i className="fas fa-clock absolute bottom-4 right-4 text-amber-50 text-5xl group-hover:scale-110 transition-transform"></i>
+              </div>
+              <div className="bg-gradient-to-br from-teal-500 to-cyan-600 p-5 rounded-2xl shadow-lg shadow-cyan-500/20 relative overflow-hidden group transform transition hover:-translate-y-1">
+                <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 mix-blend-overlay"></div>
+                <div className="relative z-10"><p className="text-xs font-bold text-teal-100 uppercase tracking-wider mb-1">Akan Datang</p><p className="text-4xl font-black text-white drop-shadow-md">{stats.upcoming}</p></div>
+                <i className="fas fa-check-circle absolute bottom-4 right-4 text-white/20 text-5xl group-hover:scale-110 transition-transform"></i>
+              </div>
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group hover:shadow-md transition-shadow">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-rose-400"></div>
+                <div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Dibatalkan/Ditolak</p><p className="text-4xl font-black text-slate-800">{stats.cancelled}</p></div>
+                <i className="fas fa-times-circle absolute bottom-4 right-4 text-rose-50 text-5xl group-hover:scale-110 transition-transform"></i>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-slate-100 relative">
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-teal-400 to-cyan-500"></div>
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <h3 className="font-bold text-slate-800 flex items-center gap-2"><i className="fas fa-clock text-cyan-600"></i> Log Tempahan Aktif</h3>
+                <button onClick={() => setView('form')} className="bg-white border border-cyan-200 text-cyan-700 hover:bg-cyan-50 hover:text-cyan-800 px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 shadow-sm transition-all">
+                  <i className="fas fa-plus-circle"></i> Rekod Baru
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-100">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">ID Tempahan</th>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Premis & Tujuan</th>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Tarikh & Slot Masa</th>
+                      <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Status Terkini</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-slate-50">
+                    {myBookings.map(b => (
+                      <tr key={b.id} className="hover:bg-cyan-50/30 transition-colors group">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-cyan-700 font-medium">{b.id}</td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-bold text-slate-800">{FACILITIES.find(f=>f.id===b.premis)?.name}</div>
+                          <div className="text-xs text-slate-500 mt-0.5">{b.tujuan}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm font-semibold text-slate-800">{b.tarikh}</div>
+                          <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1"><i className="fas fa-clock text-xs"></i> {formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-3 py-1 inline-flex text-xs font-bold rounded-lg border ${STATUS_COLORS[b.status]}`}>{b.status}</span>
+                        </td>
+                      </tr>
+                    ))}
+                    {myBookings.length === 0 && <tr><td colSpan="4" className="text-center py-12 text-slate-400 font-medium">Tiada sebarang rekod ditemui.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const DashboardAdmin = () => {
+        const stats = {
+          total: bookings.length, today: bookings.filter(b => b.tarikh === new Date().toISOString().split('T')[0]).length,
+          pending: bookings.filter(b => b.status === 'Menunggu Kelulusan').length, approved: bookings.filter(b => b.status === 'Diluluskan').length
+        };
+
+        return (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-black text-slate-800">Panel Kawalan Pentadbir</h2>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-slate-400"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Kumulatif Sistem</p><p className="text-4xl font-black text-slate-800">{stats.total}</p>
+              </div>
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-cyan-400"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Tempahan Hari Ini</p><p className="text-4xl font-black text-slate-800">{stats.today}</p>
+              </div>
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-400"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Tindakan Tertunggak</p><p className="text-4xl font-black text-slate-800">{stats.pending}</p>
+              </div>
+              <div className="bg-gradient-to-br from-teal-500 to-cyan-600 p-5 rounded-2xl shadow-lg shadow-cyan-500/20 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 mix-blend-overlay"></div>
+                <div className="relative z-10"><p className="text-xs font-bold text-teal-100 uppercase tracking-wider mb-1">Lulus Rasmi</p><p className="text-4xl font-black text-white drop-shadow-md">{stats.approved}</p></div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
+                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-teal-400 to-cyan-500"></div>
+                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><i className="fas fa-chart-bar text-cyan-500"></i> Analitik Kapasiti Premis</h3>
+                <div className="space-y-5">
+                  {FACILITIES.map(f => {
+                    const count = bookings.filter(b => b.premis === f.id).length;
+                    const pct = stats.total ? (count / stats.total) * 100 : 0;
+                    return (
+                      <div key={f.id}>
+                        <div className="flex justify-between text-sm mb-2"><span className="font-semibold text-slate-600">{f.name}</span><span className="font-bold text-cyan-600">{count} Slot</span></div>
+                        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden"><div className="bg-gradient-to-r from-teal-400 to-cyan-500 h-2.5 rounded-full" style={{ width: `${pct}%` }}></div></div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+              
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-400 to-orange-400"></div>
+                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><i className="fas fa-bell text-amber-500"></i> Pusat Notifikasi Semasa</h3>
+                <div className="space-y-4">
+                  {bookings.filter(b=>b.status==='Menunggu Kelulusan').slice(0, 4).map(b => (
+                    <div key={b.id} className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex justify-between items-center hover:bg-white hover:shadow-md transition-all group">
+                      <div>
+                        <p className="font-bold text-sm text-slate-800 group-hover:text-cyan-700 transition-colors">{b.namaPemohon}</p>
+                        <p className="text-xs text-slate-500 mt-1 flex items-center gap-1"><i className="fas fa-clock text-xs"></i> {FACILITIES.find(f=>f.id===b.premis)?.name} - {b.tarikh}</p>
+                      </div>
+                      <button onClick={()=>setView('admin-list')} className="text-xs font-bold bg-white border border-cyan-200 text-cyan-600 px-3 py-1.5 rounded-lg shadow-sm hover:bg-cyan-50">Kawal</button>
+                    </div>
+                  ))}
+                  {bookings.filter(b=>b.status==='Menunggu Kelulusan').length === 0 && <div className="p-6 text-center text-sm font-medium text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">Tiada modul menunggu tindakan.</div>}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const AdminList = () => {
+        const [filterStatus, setFilterStatus] = useState('Semua');
+        const [searchTerm, setSearchTerm] = useState('');
+
+        const filtered = bookings.filter(b => {
+          const matchStatus = filterStatus === 'Semua' || b.status === filterStatus;
+          const matchSearch = b.namaPemohon.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                              b.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                              b.organisasi.toLowerCase().includes(searchTerm.toLowerCase());
+          return matchStatus && matchSearch;
+        });
+
+        const handleActionClick = (id, action) => {
+          if(action === 'Diluluskan') showDialog({ type: 'alert', id, title: 'Pengesahan Rasmi', message: 'Anda mengesahkan kelulusan slot masa bagi permohonan ini?', action: () => updateBookingStatus(id, 'Diluluskan') });
+          else if (action === 'Ditolak') showDialog({ type: 'confirm-tolak', id, title: 'Batal Kelulusan (Tolak)', message: 'Nyatakan log alasan penolakan rasmi dalam pangkalan data:' });
+          else if (action === 'Dibatalkan') showDialog({ type: 'confirm-batal', id, title: 'Tarik Balik Permohonan (Batal)', message: 'Nyatakan punca permohonan ini dibatalkan di ruang bawah:' });
+          else if (action === 'Buka Semula') showDialog({ type: 'alert', id, title: 'Buka Sekatan', message: 'Adakah anda pasti untuk membuka semula premis ini untuk tempahan umum?', action: () => updateBookingStatus(id, 'Dibatalkan', 'Sekatan dibuka oleh pentadbir') });
+        };
+
+        const exportToCSV = () => {
+          const approvedBookings = bookings.filter(b => b.status === 'Diluluskan');
+          if (approvedBookings.length === 0) {
+            showDialog({ type: 'alert', title: 'Tiada Rekod', message: 'Tiada permohonan yang diluluskan untuk dimuat turun ke Excel buat masa ini.' });
+            return;
+          }
+
+          const headers = ['ID Tempahan', 'Nama Pemohon', 'No. Telefon', 'Emel', 'Jawatan', 'Sektor/Unit', 'Premis', 'Tujuan', 'Tarikh', 'Masa Mula', 'Masa Tamat', 'Bil Peserta', 'Catatan Pemohon', 'Catatan Pentadbir'];
+          
+          const csvRows = approvedBookings.map(b => [
+            b.id,
+            `"${b.namaPemohon}"`,
+            `"${b.noTelefon}"`,
+            b.emel,
+            `"${b.jawatan}"`,
+            `"${b.organisasi}"`,
+            `"${FACILITIES.find(f => f.id === b.premis)?.name || b.premis}"`,
+            `"${b.tujuan.replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+            b.tarikh,
+            formatMasa(b.masaMula),
+            formatMasa(b.masaTamat),
+            b.bilPeserta,
+            `"${(b.catatan || '').replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+            `"${(b.catatanAdmin || '-').replace(/"/g, '""').replace(/\n/g, ' ')}"`
+          ].join(','));
+
+          const csvContent = "\uFEFF" + [headers.join(','), ...csvRows].join('\n');
+          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          
+          const link = document.createElement('a');
+          link.href = url;
+          link.setAttribute('download', `Rekod_Tempahan_Diluluskan_${new Date().toISOString().split('T')[0]}.csv`);
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        };
+
+        return (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col h-full relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-teal-400 to-cyan-500"></div>
+            <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row gap-4 justify-between items-center">
+              <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2"><i className="fas fa-filter text-cyan-600"></i> Kawalan Rekod Data</h3>
+              <div className="flex gap-3 w-full md:w-auto flex-wrap">
+                <button onClick={exportToCSV} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-all flex items-center gap-2">
+                  <i className="fas fa-file-excel"></i> Excel
+                </button>
+                <div className="relative flex-1 md:w-64">
+                  <i className="fas fa-search absolute left-3 top-3 text-slate-400"></i>
+                  <input type="text" placeholder="Cari ID, Nama, Unit..." value={searchTerm} onChange={(e)=>setSearchTerm(e.target.value)} className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500 shadow-sm" />
+                </div>
+                <select value={filterStatus} onChange={(e)=>setFilterStatus(e.target.value)} className="border border-slate-200 rounded-xl text-sm px-4 py-2 bg-white focus:ring-2 focus:ring-cyan-500/30 font-medium text-slate-600 shadow-sm">
+                  <option value="Semua">Semua Status</option>
+                  <option value="Menunggu Kelulusan">Menunggu</option>
+                  <option value="Diluluskan">Diluluskan</option>
+                  <option value="Ditolak">Ditolak</option>
+                  <option value="Dibatalkan">Dibatalkan</option>
+                  <option value="Ditutup">Ditutup (Blok)</option>
+                </select>
+              </div>
+            </div>
+            
+            <div className="overflow-x-auto flex-1">
+              <table className="min-w-full divide-y divide-slate-100">
+                <thead className="bg-slate-50/80">
+                  <tr>
+                    <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Pemohon / Rujukan</th>
+                    <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Premis / Maklumat</th>
+                    <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Jadual Masa</th>
+                    <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Kedudukan Semasa</th>
+                    <th className="px-5 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Fungsi Kawalan</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-slate-50">
+                  {filtered.map(b => (
+                    <tr key={b.id} className="hover:bg-cyan-50/20 transition-colors">
+                      <td className="px-5 py-4"><div className="font-bold text-sm text-slate-800">{b.namaPemohon}</div><div className="text-[11px] mt-0.5 text-cyan-600 font-mono font-bold bg-cyan-50 inline-block px-1.5 rounded">{b.id}</div><div className="text-xs text-slate-500 mt-1">{b.organisasi}</div></td>
+                      <td className="px-5 py-4"><div className="font-bold text-sm text-slate-700">{FACILITIES.find(f=>f.id===b.premis)?.name}</div><div className="text-xs text-slate-500 mt-1 truncate max-w-[200px]" title={b.tujuan}>{b.tujuan}</div><div className="text-xs text-slate-400 mt-0.5">Kapasiti Terlibat: {b.bilPeserta} Pax</div></td>
+                      <td className="px-5 py-4"><div className="text-sm font-bold text-slate-800">{b.tarikh}</div><div className="text-xs font-medium text-slate-500 mt-1 bg-slate-100 inline-block px-2 py-0.5 rounded-md">{formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div></td>
+                      <td className="px-5 py-4 whitespace-nowrap"><span className={`px-3 py-1 inline-flex text-xs font-bold rounded-lg border ${STATUS_COLORS[b.status]}`}>{b.status}</span>{b.catatanAdmin && <div className="text-[10px] font-medium text-slate-500 mt-1.5 max-w-[120px] truncate bg-slate-50 p-1 rounded" title={b.catatanAdmin}>Notis: {b.catatanAdmin}</div>}</td>
+                      <td className="px-5 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        {b.status === 'Menunggu Kelulusan' && (
+                          <div className="flex justify-end gap-2">
+                            <button onClick={() => handleActionClick(b.id, 'Diluluskan')} className="bg-gradient-to-r from-teal-500 to-cyan-500 text-white hover:from-teal-400 hover:to-cyan-400 px-4 py-1.5 rounded-lg shadow-md shadow-cyan-500/20 transition-all font-bold text-xs">Luluskan</button>
+                            <button onClick={() => handleActionClick(b.id, 'Ditolak')} className="bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg shadow-sm transition-all font-bold text-xs">Tolak</button>
+                          </div>
+                        )}
+                        {b.status === 'Diluluskan' && <button onClick={() => handleActionClick(b.id, 'Dibatalkan')} className="bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-rose-600 px-3 py-1.5 rounded-lg shadow-sm text-xs font-bold transition-all">Gantung Hak</button>}
+                        {b.status === 'Ditutup' && <button onClick={() => handleActionClick(b.id, 'Buka Semula')} className="bg-gray-800 text-white hover:bg-gray-700 px-3 py-1.5 rounded-lg shadow-sm text-xs font-bold transition-all">Buka Semula</button>}
+                      </td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && <tr><td colSpan="5" className="text-center py-12 text-slate-400 font-medium">Tiada hasil saringan yang menepati kriteria pencarian.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      };
+
+      const CalendarView = () => {
+        const sortedBookings = [...bookings].filter(b => b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup').sort((a, b) => new Date(a.tarikh) - new Date(b.tarikh));
+        const grouped = sortedBookings.reduce((acc, b) => { acc[b.tarikh] = acc[b.tarikh] || []; acc[b.tarikh].push(b); return acc; }, {});
+
+        return (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-teal-400 to-cyan-500"></div>
+            <h2 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-3"><i className="fas fa-calendar-alt text-cyan-500"></i> Unjuran Kalendar Induk</h2>
+            <div className="flex gap-5 mb-8 flex-wrap">
+               <span className="flex items-center gap-2 text-xs font-bold text-slate-600 uppercase tracking-wider"><div className="w-3 h-3 rounded bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.6)]"></div> Terjamin (Lulus)</span>
+               <span className="flex items-center gap-2 text-xs font-bold text-slate-600 uppercase tracking-wider"><div className="w-3 h-3 rounded bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]"></div> Tertunggak (Menunggu)</span>
+               <span className="flex items-center gap-2 text-xs font-bold text-slate-600 uppercase tracking-wider"><div className="w-3 h-3 rounded bg-gray-800 shadow-[0_0_8px_rgba(31,41,55,0.6)]"></div> Disekat (Blok)</span>
+            </div>
+            <div className="space-y-8">
+              {Object.keys(grouped).length === 0 ? <p className="text-slate-400 font-medium p-6 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">Kapasiti penuh, tiada jadual ditempah.</p> : null}
+              {Object.keys(grouped).map(date => (
+                <div key={date} className="relative pl-6 before:absolute before:left-0 before:top-2 before:bottom-0 before:w-0.5 before:bg-slate-100">
+                  <div className="absolute left-[-5px] top-2.5 w-3 h-3 rounded-full bg-cyan-500 ring-4 ring-white shadow-sm"></div>
+                  <h3 className="font-black text-lg text-slate-700 mb-4 tracking-tight">{date}</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {grouped[date].sort((a,b) => timeToMins(a.masaMula) - timeToMins(b.masaMula)).map(b => (
+                       <div key={b.id} className={`p-4 rounded-xl border relative overflow-hidden transition-all hover:shadow-md ${b.status === 'Ditutup' ? 'border-gray-300 bg-gradient-to-br from-white to-gray-100' : b.status === 'Diluluskan' ? 'border-cyan-100 bg-gradient-to-br from-white to-cyan-50/50' : 'border-amber-100 bg-gradient-to-br from-white to-amber-50/50'}`}>
+                          <div className={`absolute top-0 left-0 w-1 h-full ${b.status === 'Ditutup' ? 'bg-gray-800' : b.status === 'Diluluskan' ? 'bg-cyan-400' : 'bg-amber-400'}`}></div>
+                          <div className="font-bold text-sm text-slate-800">{FACILITIES.find(f=>f.id===b.premis)?.name}</div>
+                          <div className="text-xs font-medium text-slate-500 mt-2 flex items-center gap-1.5"><i className={b.status === 'Ditutup' ? 'fas fa-lock text-gray-700' : b.status === 'Diluluskan' ? 'fas fa-clock text-cyan-500' : 'fas fa-clock text-amber-500'}></i> {formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div>
+                          <div className="text-xs font-medium text-slate-500 mt-1 flex items-center gap-1.5"><i className="fas fa-user text-slate-400"></i> {b.namaPemohon} ({b.organisasi})</div>
+                       </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      };
+
+      const AuditLogView = () => (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-teal-400 to-cyan-500"></div>
+          <h2 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-3"><i className="fas fa-shield-alt text-cyan-500"></i> Log Sistem Keselamatan</h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm divide-y divide-slate-100">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Cap Masa Siber</th>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Perantara (User)</th>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Protokol Kesan</th>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Maklumat Trafik</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                 {auditLogs.map(log => (
+                   <tr key={log.id} className="hover:bg-cyan-50/30 transition-colors">
+                     <td className="px-5 py-4 font-mono text-xs text-slate-400">{log.timestamp}</td>
+                     <td className="px-5 py-4 font-bold text-slate-700">{log.user}</td>
+                     <td className="px-5 py-4"><span className="bg-cyan-50 border border-cyan-100 text-cyan-700 px-2.5 py-1 rounded-md text-xs font-bold">{log.action}</span></td>
+                     <td className="px-5 py-4 text-slate-500 font-medium">{log.details}</td>
+                   </tr>
+                 ))}
+                 {auditLogs.length === 0 && <tr><td colSpan="4" className="text-center py-8 text-slate-400 font-medium">Laluan log trafik kosong pada ketika ini.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+
+      const AdminUsersList = () => (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-teal-400 to-cyan-500"></div>
+          <h2 className="text-2xl font-black text-slate-800 mb-6 flex items-center gap-3"><i className="fas fa-users text-cyan-500"></i> Pangkalan Data Pengguna</h2>
+          
+          <div className="bg-blue-50 border border-blue-100 text-blue-700 p-4 rounded-xl mb-6 text-sm flex items-start gap-3">
+            <i className="fas fa-exclamation-circle mt-1"></i>
+            <p><strong>Perhatian Pentadbir:</strong> Ruangan ini merekodkan senarai ID dan Kata Laluan yang didaftarkan oleh pemohon untuk tujuan rekod dan rujukan semakan keselamatan anda.</p>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm divide-y divide-slate-100 border border-slate-100 rounded-xl">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Nama & Emel</th>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">ID Pengguna (Username)</th>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Kata Laluan (Password)</th>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Tarikh Daftar</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 bg-white">
+                 {users.map((u, i) => (
+                   <tr key={i} className="hover:bg-cyan-50/30 transition-colors">
+                     <td className="px-5 py-4">
+                        <div className="font-bold text-slate-800">{u.nama}</div>
+                        <div className="text-xs text-slate-500 mt-0.5">{u.emel}</div>
+                     </td>
+                     <td className="px-5 py-4 font-mono font-bold text-cyan-700 bg-cyan-50/50">{u.id}</td>
+                     <td className="px-5 py-4 font-mono text-rose-600 bg-rose-50/50">{u.pass}</td>
+                     <td className="px-5 py-4 text-slate-500 text-xs font-medium">{u.tarikhDaftar}</td>
+                   </tr>
+                 ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+
+      if (!isAuthenticated) return <LoginScreen />;
+
+      return (
+        <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+          <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-sm z-40 sticky top-0">
+            <div className="max-w-[90rem] mx-auto px-4 py-3 md:py-4 flex justify-between items-center">
+              <div className="flex items-center gap-4">
+                <button onClick={() => setSidebarOpen(!sidebarOpen)} className="md:hidden text-slate-600 hover:text-cyan-600 transition-colors"><i className="fas fa-bars text-xl"></i></button>
+                <img src="https://i.postimg.cc/4NcXx1NT/LOGO-PPDBP-FONT-HITAM.png" className="h-10 sm:h-12 md:h-14 drop-shadow-sm" alt="Logo" />
+                <div className="hidden sm:block border-l-2 h-10 mx-3 border-slate-200"></div>
+                <div>
+                  <h1 className="font-black text-lg md:text-xl text-slate-800 tracking-tight uppercase">Sistem Tempahan Premis</h1>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                 <div className="hidden md:flex items-center gap-2 text-sm font-bold text-slate-700 bg-slate-100 px-4 py-2 rounded-xl border border-slate-200">
+                   <i className="fas fa-user text-cyan-600"></i> <span>{currentUser.nama}</span>
+                 </div>
+                 <button onClick={handleLogout} title="Putus Talian" className="p-2.5 rounded-xl bg-rose-50 text-rose-500 hover:bg-rose-500 hover:text-white border border-rose-100 transition-all shadow-sm">
+                   <i className="fas fa-sign-out-alt text-lg"></i>
+                 </button>
+              </div>
+            </div>
+          </header>
+
+          <div className="flex flex-1 overflow-hidden relative max-w-[90rem] w-full mx-auto">
+            <aside className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 fixed md:static inset-y-0 left-0 w-64 flex-shrink-0 bg-[#0B1727] shadow-2xl z-50 transition-transform duration-300 ease-in-out overflow-y-auto border-r border-slate-800`}>
+              <div className="h-full flex flex-col p-5">
+                <nav className="space-y-2 flex-1 mt-2">
+                  {role === 'user' && (
+                    <>
+                      <button onClick={() => {setView('form'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'form' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-plus-circle"></i> Tiket Tempahan</button>
+                      <button onClick={() => {setView('user-dashboard'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'user-dashboard' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-home"></i> Hab Induk</button>
+                      <button onClick={() => {setView('calendar'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'calendar' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-calendar-alt"></i> Kalendar Visual</button>
+                    </>
+                  )}
+                  {role === 'admin' && (
+                    <>
+                      <button onClick={() => {setView('admin-dashboard'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'admin-dashboard' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-home"></i> Papan Pemuka</button>
+                      <button onClick={() => {setView('form'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'form' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-plus-circle"></i> Modul Cipta</button>
+                      <button onClick={() => {setView('admin-list'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'admin-list' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-file-alt"></i> Pusat Kawalan</button>
+                      <button onClick={() => {setView('admin-block'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'admin-block' ? 'bg-gradient-to-r from-gray-600 to-gray-800 text-white shadow-[0_0_15px_rgba(31,41,55,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-lock"></i> Sekatan Premis</button>
+                      <button onClick={() => {setView('calendar'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'calendar' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-calendar-alt"></i> Peta Kalendar</button>
+                      <button onClick={() => {setView('admin-users'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'admin-users' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-users"></i> Akaun Pengguna</button>
+                      <button onClick={() => {setView('audit'); setSidebarOpen(false)}} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-bold transition-all duration-300 ${view === 'audit' ? 'bg-gradient-to-r from-teal-500 to-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'text-slate-400 hover:bg-slate-800/50 hover:text-cyan-300'}`}><i className="fas fa-shield-alt"></i> Jejak Keselamatan</button>
+                    </>
+                  )}
+                </nav>
+                <div className="border-t border-slate-800/50 pt-5 mt-auto">
+                  <div className="bg-slate-800/30 rounded-xl p-3 flex items-center justify-center gap-2 border border-slate-700/50 shadow-inner">
+                     <div className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)] animate-pulse"></div>
+                     <span className="text-[11px] font-bold tracking-widest text-cyan-100 uppercase">Status: Bersambung ke Firebase</span>
+                  </div>
+                </div>
+              </div>
+            </aside>
+
+            <main className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50">
+              <div className="max-w-5xl mx-auto h-full animate-slide-up">
+                {view === 'user-dashboard' && <DashboardUser />}
+                {view === 'admin-dashboard' && <DashboardAdmin />}
+                {view === 'form' && <BookingForm />}
+                {view === 'admin-block' && <AdminBlockForm />}
+                {view === 'admin-list' && <AdminList />}
+                {view === 'calendar' && <CalendarView />}
+                {view === 'audit' && <AuditLogView />}
+                {view === 'admin-users' && <AdminUsersList />}
+              </div>
+            </main>
+          </div>
+
+          {sidebarOpen && <div className="fixed inset-0 bg-[#0B1727]/80 z-40 md:hidden backdrop-blur-sm" onClick={() => setSidebarOpen(false)}></div>}
+
+          <TelegramToast messages={telegramMsgs} removeMessage={(id) => setTelegramMsgs(prev => prev.filter(m => m.id !== id))} />
+
+          {dialogConfig.isOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4 backdrop-blur-md">
+              <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-[0_20px_50px_rgba(6,182,212,0.15)] relative overflow-hidden animate-slide-up border border-slate-100">
+                <div className={`absolute top-0 left-0 w-full h-1.5 ${dialogConfig.type.includes('tolak') || dialogConfig.type.includes('batal') ? 'bg-rose-500' : 'bg-gradient-to-r from-teal-400 to-cyan-500'}`}></div>
+                <h3 className="font-black text-xl mb-3 text-slate-800 flex items-center gap-3">
+                  <i className={dialogConfig.type.includes('tolak') || dialogConfig.type.includes('batal') ? 'fas fa-exclamation-circle text-rose-500' : 'fas fa-exclamation-circle text-cyan-500'}></i>
+                  {dialogConfig.title}
+                </h3>
+                <p className="text-slate-500 text-sm font-medium mb-6 leading-relaxed">{dialogConfig.message}</p>
+                
+                {(dialogConfig.type === 'confirm-tolak' || dialogConfig.type === 'confirm-batal') && (
+                  <textarea 
+                    autoFocus
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500 focus:outline-none transition-all text-sm" 
+                    rows="3" placeholder="Perekodan Alasan Siber..." id="reason-input"
+                  ></textarea>
+                )}
+
+                <div className="flex justify-end gap-3 mt-2">
+                  <button onClick={closeDialog} className="px-5 py-2.5 rounded-xl text-slate-500 hover:bg-slate-100 font-bold text-sm transition-colors">Tutup</button>
+                  
+                  {dialogConfig.type === 'alert' && dialogConfig.action && (
+                    <button onClick={() => { dialogConfig.action(); closeDialog(); }} className="px-5 py-2.5 bg-gradient-to-r from-teal-500 to-cyan-500 text-white rounded-xl hover:from-teal-400 hover:to-cyan-400 font-bold text-sm shadow-[0_4px_10px_rgba(6,182,212,0.3)] transition-all">Persetujuan Terus</button>
+                  )}
+                  {dialogConfig.type === 'alert' && !dialogConfig.action && (
+                     <button onClick={closeDialog} className="px-5 py-2.5 bg-slate-800 text-white rounded-xl hover:bg-slate-700 font-bold text-sm shadow-md transition-all">Kembali</button>
+                  )}
+                  
+                  {(dialogConfig.type === 'confirm-tolak' || dialogConfig.type === 'confirm-batal') && (
+                    <button onClick={() => {
+                      const reason = document.getElementById('reason-input').value;
+                      if(!reason) { alert("Pengisian alasan diwajibkan oleh pangkalan data."); return; }
+                      updateBookingStatus(dialogConfig.id, dialogConfig.type === 'confirm-tolak' ? 'Ditolak' : 'Dibatalkan', reason);
+                    }} className="px-5 py-2.5 bg-rose-500 text-white rounded-xl hover:bg-rose-400 font-bold text-sm shadow-[0_4px_10px_rgba(244,63,94,0.3)] transition-all">Sahkan Perintah Eksekusi</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
