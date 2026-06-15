@@ -761,8 +761,11 @@
       };
 
       const DashboardAdmin = () => {
+        const todayDate = new Date().toISOString().split('T')[0];
+        const todayBookings = bookings.filter(b => b.tarikh === todayDate);
+
         const stats = {
-          total: bookings.length, today: bookings.filter(b => b.tarikh === new Date().toISOString().split('T')[0]).length,
+          total: bookings.length, today: todayBookings.length,
           pending: bookings.filter(b => b.status === 'Menunggu Kelulusan').length, approved: bookings.filter(b => b.status === 'Diluluskan').length
         };
 
@@ -773,9 +776,39 @@
               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-1.5 h-full bg-slate-400"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Kumulatif Sistem</p><p className="text-4xl font-black text-slate-800">{stats.total}</p>
               </div>
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-cyan-400"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Tempahan Hari Ini</p><p className="text-4xl font-black text-slate-800">{stats.today}</p>
+              
+              {/* Kad Tempahan Hari Ini - Interaktif & Boleh Klik */}
+              <div 
+                onClick={() => setView('admin-list')}
+                className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden group cursor-pointer hover:border-cyan-300 hover:shadow-md transition-all"
+                title="Klik untuk pergi ke Pusat Kawalan"
+              >
+                <div className="absolute top-0 left-0 w-1.5 h-full bg-cyan-400 z-10"></div>
+                
+                {/* Paparan Asal (Lalai) */}
+                <div className="relative z-0 transition-opacity duration-300 group-hover:opacity-0">
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Tempahan Hari Ini</p>
+                  <p className="text-4xl font-black text-slate-800">{stats.today}</p>
+                </div>
+
+                {/* Paparan Pop Up (Apabila tetikus diseret - Hover) */}
+                <div className="absolute inset-0 bg-gradient-to-br from-cyan-50 to-white p-4 pl-5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-20 flex flex-col">
+                  <p className="text-[10px] font-bold text-cyan-600 uppercase tracking-wider mb-2 border-b border-cyan-100 pb-1 flex justify-between items-center">
+                    Senarai Semasa <i className="fas fa-external-link-alt text-cyan-400"></i>
+                  </p>
+                  <div className="overflow-y-auto pr-1 space-y-1.5" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+                    {todayBookings.length > 0 ? todayBookings.map(b => (
+                      <div key={b.id} className="text-[10px] leading-tight bg-white p-1.5 rounded border border-cyan-50 shadow-sm">
+                        <span className="font-bold text-slate-700">{b.id}</span>
+                        <span className="text-slate-500 block truncate">{b.namaPemohon}</span>
+                      </div>
+                    )) : (
+                      <div className="text-[10px] text-slate-400 italic mt-2">Tiada tempahan untuk hari ini.</div>
+                    )}
+                  </div>
+                </div>
               </div>
+
               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-400"></div><p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Tindakan Tertunggak</p><p className="text-4xl font-black text-slate-800">{stats.pending}</p>
               </div>
@@ -967,8 +1000,15 @@
                        <div key={b.id} className={`p-4 rounded-xl border relative overflow-hidden transition-all hover:shadow-md ${b.status === 'Ditutup' ? 'border-gray-300 bg-gradient-to-br from-white to-gray-100' : b.status === 'Diluluskan' ? 'border-cyan-100 bg-gradient-to-br from-white to-cyan-50/50' : 'border-amber-100 bg-gradient-to-br from-white to-amber-50/50'}`}>
                           <div className={`absolute top-0 left-0 w-1 h-full ${b.status === 'Ditutup' ? 'bg-gray-800' : b.status === 'Diluluskan' ? 'bg-cyan-400' : 'bg-amber-400'}`}></div>
                           <div className="font-bold text-sm text-slate-800">{FACILITIES.find(f=>f.id===b.premis)?.name}</div>
-                          <div className="text-xs font-medium text-slate-500 mt-2 flex items-center gap-1.5"><i className={b.status === 'Ditutup' ? 'fas fa-lock text-gray-700' : b.status === 'Diluluskan' ? 'fas fa-clock text-cyan-500' : 'fas fa-clock text-amber-500'}></i> {formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div>
-                          <div className="text-xs font-medium text-slate-500 mt-1 flex items-center gap-1.5"><i className="fas fa-user text-slate-400"></i> {b.namaPemohon} ({b.organisasi})</div>
+                          <div className="text-xs font-bold text-slate-600 mt-1.5 leading-snug flex items-start gap-1.5">
+                              {b.status === 'Ditutup' ? (
+                                  <><i className="fas fa-ban text-slate-400 w-3 text-center mt-0.5"></i> <span className="text-gray-600 italic">{b.catatan || b.tujuan}</span></>
+                              ) : (
+                                  <><i className="fas fa-bullseye text-slate-400 w-3 text-center mt-0.5"></i> <span>{b.tujuan}</span></>
+                              )}
+                          </div>
+                          <div className="text-xs font-medium text-slate-500 mt-2 flex items-center gap-1.5"><i className={b.status === 'Ditutup' ? 'fas fa-lock text-gray-700 w-3 text-center' : b.status === 'Diluluskan' ? 'fas fa-clock text-cyan-500 w-3 text-center' : 'fas fa-clock text-amber-500 w-3 text-center'}></i> {formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div>
+                          <div className="text-xs font-medium text-slate-500 mt-1 flex items-center gap-1.5"><i className="fas fa-user text-slate-400 w-3 text-center"></i> {b.namaPemohon} ({b.organisasi})</div>
                        </div>
                     ))}
                   </div>
