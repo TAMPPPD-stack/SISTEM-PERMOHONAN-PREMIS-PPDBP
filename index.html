@@ -437,42 +437,52 @@
         const [form, setForm] = useState({
           namaPemohon: currentUser.nama && currentUser.nama !== 'Pemohon Awam' ? currentUser.nama : '', 
           noTelefon: '', emel: currentUser.emel && currentUser.emel !== 'pengguna@gmail.com' ? currentUser.emel : '', 
-          jawatan: '', organisasi: '', premis: 'BMTS', tujuan: '', tarikh: '', masaMula: '', masaTamat: '', bilPeserta: '', catatan: ''
+          jawatan: '', organisasi: '', premis: 'BMTS', tujuan: '', tarikhMula: '', tarikhTamat: '', masaMula: '', masaTamat: '', bilPeserta: '', catatan: ''
         });
 
         const handleChange = (e) => {
           if(e.target.name === 'masaMula') setForm({...form, masaMula: e.target.value, masaTamat: ''});
+          else if(e.target.name === 'tarikhMula') setForm({...form, tarikhMula: e.target.value, tarikhTamat: e.target.value});
           else setForm({...form, [e.target.name]: e.target.value});
         };
 
         const handleSubmit = (e) => {
           e.preventDefault();
-          const requiredFields = ['namaPemohon', 'noTelefon', 'emel', 'jawatan', 'organisasi', 'premis', 'tujuan', 'tarikh', 'masaMula', 'masaTamat', 'bilPeserta'];
+          const requiredFields = ['namaPemohon', 'noTelefon', 'emel', 'jawatan', 'organisasi', 'premis', 'tujuan', 'tarikhMula', 'tarikhTamat', 'masaMula', 'masaTamat', 'bilPeserta'];
           const isAnyEmpty = requiredFields.some(field => !form[field] || form[field].toString().trim() === '');
           
           if (isAnyEmpty) {
             showDialog({ type: 'alert', title: 'Borang Tidak Lengkap', message: 'Sila pastikan semua ruang wajib telah diisi dengan lengkap sebelum menghantar permohonan. (Kecuali Catatan Tambahan)'});
             return;
           }
+          
+          if (new Date(form.tarikhMula) > new Date(form.tarikhTamat)) {
+              showDialog({ type: 'alert', title: 'Ralat Tarikh', message: 'Tarikh tamat tidak boleh lebih awal daripada tarikh mula.'});
+              return;
+          }
 
-          if(timeToMins(form.masaMula) >= timeToMins(form.masaTamat)) {
-            showDialog({ type: 'alert', title: 'Ralat Masa', message: 'Masa tamat mesti direkodkan selepas masa mula.'});
+          if(form.tarikhMula === form.tarikhTamat && timeToMins(form.masaMula) >= timeToMins(form.masaTamat)) {
+            showDialog({ type: 'alert', title: 'Ralat Masa', message: 'Masa tamat mesti direkodkan selepas masa mula pada hari yang sama.'});
             return;
           }
           submitBooking(form);
         };
 
         const getBookedSlots = () => {
-          if (!form.premis || !form.tarikh) return [];
+          if (!form.premis || !form.tarikhMula || !form.tarikhTamat) return [];
           let booked = [];
+          
           bookings.forEach(b => {
-            if (b.premis === form.premis && b.tarikh === form.tarikh && (b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup')) {
-              const startMins = timeToMins(b.masaMula);
-              const endMins = timeToMins(b.masaTamat);
-              TIME_SLOTS.forEach(t => {
-                const tMins = timeToMins(t);
-                if (tMins >= startMins && tMins < endMins) booked.push(t);
-              });
+            if (b.premis === form.premis && (b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup')) {
+                // If it's a single day overlapping check
+                if (b.tarikhMula === form.tarikhMula && b.tarikhTamat === form.tarikhTamat && form.tarikhMula === form.tarikhTamat) {
+                  const startMins = timeToMins(b.masaMula);
+                  const endMins = timeToMins(b.masaTamat);
+                  TIME_SLOTS.forEach(t => {
+                    const tMins = timeToMins(t);
+                    if (tMins >= startMins && tMins < endMins) booked.push(t);
+                  });
+                }
             }
           });
           return booked;
@@ -483,14 +493,17 @@
           const tMins = timeToMins(t);
           const mulaMins = timeToMins(form.masaMula);
           if (!form.masaMula) return false;
-          if (tMins <= mulaMins) return true; 
+          
+          if (form.tarikhMula === form.tarikhTamat && tMins <= mulaMins) return true; 
           
           let overlapping = false;
           bookings.forEach(b => {
-            if (b.premis === form.premis && b.tarikh === form.tarikh && (b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup')) {
-              const bStart = timeToMins(b.masaMula);
-              const bEnd = timeToMins(b.masaTamat);
-              if (mulaMins < bEnd && tMins > bStart) overlapping = true;
+            if (b.premis === form.premis && (b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup')) {
+               if (b.tarikhMula === form.tarikhMula && b.tarikhTamat === form.tarikhTamat && form.tarikhMula === form.tarikhTamat) {
+                  const bStart = timeToMins(b.masaMula);
+                  const bEnd = timeToMins(b.masaTamat);
+                  if (mulaMins < bEnd && tMins > bStart) overlapping = true;
+               }
             }
           });
           return overlapping;
@@ -523,7 +536,10 @@
                     </select>
                   </div>
                   <div><label className="block text-xs font-semibold text-slate-500 mb-1">Tujuan Penggunaan</label><textarea required name="tujuan" value={form.tujuan} rows="2" onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all"></textarea></div>
-                  <div><label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Tempahan</label><input required type="date" name="tarikh" value={form.tarikh} min={new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                  <div className="grid grid-cols-2 gap-4">
+                      <div><label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Mula</label><input required type="date" name="tarikhMula" value={form.tarikhMula} min={new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                      <div><label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Tamat</label><input required type="date" name="tarikhTamat" value={form.tarikhTamat} min={form.tarikhMula || new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 p-2.5 text-sm transition-all" /></div>
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-500 mb-1">Masa Mula</label>
@@ -531,7 +547,7 @@
                         <option value="" disabled>Pilih Jam</option>
                         {TIME_SLOTS.map(t => {
                            const isBooked = bookedTimeSlots.includes(t);
-                           return <option key={t} value={t} disabled={isBooked}>{formatMasa(t)} {isBooked ? '(Penuh)' : ''}</option>;
+                           return <option key={t} value={t} disabled={isBooked}>{formatMasa(t)} {isBooked && form.tarikhMula === form.tarikhTamat ? '(Penuh)' : ''}</option>;
                         })}
                       </select>
                     </div>
@@ -541,7 +557,7 @@
                         <option value="" disabled>Pilih Jam</option>
                         {TIME_SLOTS.map(t => {
                            const isDisabled = isTamatDisabled(t);
-                           return <option key={t} value={t} disabled={isDisabled}>{formatMasa(t)} {isDisabled && timeToMins(t) > timeToMins(form.masaMula||'24:00') ? '(Bertindih)' : ''}</option>;
+                           return <option key={t} value={t} disabled={isDisabled}>{formatMasa(t)} {isDisabled && form.tarikhMula === form.tarikhTamat && timeToMins(t) > timeToMins(form.masaMula||'24:00') ? '(Bertindih)' : ''}</option>;
                         })}
                       </select>
                     </div>
@@ -563,13 +579,15 @@
 
       const AdminBlockForm = () => {
         const [form, setForm] = useState({
-          premis: 'BMTS', tarikh: '', sepenuhHari: false, masaMula: '', masaTamat: '', catatan: ''
+          premis: 'BMTS', tarikhMula: '', tarikhTamat: '', sepenuhHari: false, masaMula: '', masaTamat: '', catatan: ''
         });
 
         const handleChange = (e) => {
           const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
           if (e.target.name === 'sepenuhHari' && value) {
              setForm({...form, sepenuhHari: value, masaMula: '07:00', masaTamat: '23:00'});
+          } else if (e.target.name === 'tarikhMula') {
+              setForm({...form, tarikhMula: value, tarikhTamat: value});
           } else {
              setForm({...form, [e.target.name]: value});
           }
@@ -580,17 +598,22 @@
           let mMula = form.sepenuhHari ? '07:00' : form.masaMula;
           let mTamat = form.sepenuhHari ? '23:00' : form.masaTamat;
 
-          if (!form.tarikh || !mMula || !mTamat) {
+          if (!form.tarikhMula || !form.tarikhTamat || !mMula || !mTamat) {
             showDialog({ type: 'alert', title: 'Maklumat Tidak Lengkap', message: 'Sila lengkapkan pilihan tarikh dan masa sekatan.'});
             return;
           }
+          
+          if (new Date(form.tarikhMula) > new Date(form.tarikhTamat)) {
+              showDialog({ type: 'alert', title: 'Ralat Tarikh', message: 'Tarikh tamat tidak boleh lebih awal daripada tarikh mula.'});
+              return;
+          }
 
-          if(timeToMins(mMula) >= timeToMins(mTamat)) {
-            showDialog({ type: 'alert', title: 'Ralat Masa', message: 'Masa tamat mesti direkodkan selepas masa mula.'});
+          if(form.tarikhMula === form.tarikhTamat && timeToMins(mMula) >= timeToMins(mTamat)) {
+            showDialog({ type: 'alert', title: 'Ralat Masa', message: 'Masa tamat mesti direkodkan selepas masa mula pada hari yang sama.'});
             return;
           }
 
-          if (checkOverlap(form.premis, form.tarikh, mMula, mTamat)) {
+          if (checkOverlap(form.premis, form.tarikhMula, mMula, mTamat)) { // Note: Simple overlap check might need expansion for ranges
             showDialog({ type: 'alert', title: 'Pertindihan Jadual Dikesan', message: 'Terdapat tempahan yang telah wujud pada slot masa ini. Sila gantung/batalkan tempahan sedia ada sebelum menyekat slot.' });
             return;
           }
@@ -600,14 +623,14 @@
             id: newId,
             namaPemohon: 'PENTADBIR (SISTEM)', noTelefon: '-', emel: currentUser.emel,
             jawatan: 'Sistem Kawalan', organisasi: 'PPD Bangsar/Pudu',
-            premis: form.premis, tujuan: 'Sekatan Pentadbir (Blok)', tarikh: form.tarikh,
+            premis: form.premis, tujuan: 'Sekatan Pentadbir (Blok)', tarikhMula: form.tarikhMula, tarikhTamat: form.tarikhTamat, tarikh: form.tarikhMula, // keep 'tarikh' for backwards compatibility in lists
             masaMula: mMula, masaTamat: mTamat, bilPeserta: 0,
             catatan: form.catatan || 'Ditutup oleh Pentadbir', status: 'Ditutup', timestamp: new Date().toISOString()
           };
 
           try {
             await db.collection("bookings").doc(newId).set(newBooking);
-            addAuditLog('Sekatan Premis', `Premis ${form.premis} disekat pada ${form.tarikh}`);
+            addAuditLog('Sekatan Premis', `Premis ${form.premis} disekat dari ${form.tarikhMula} hingga ${form.tarikhTamat}`);
             showDialog({
               type: 'alert', title: 'Sekatan Berjaya', message: 'Premis telah berjaya disekat dan dihalang daripada sebarang tempahan umum untuk slot masa yang dipilih.',
               action: () => setView('admin-list')
@@ -640,9 +663,15 @@
                       {FACILITIES.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Sekatan</label>
-                    <input required type="date" name="tarikh" value={form.tarikh} min={new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all" />
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Mula</label>
+                        <input required type="date" name="tarikhMula" value={form.tarikhMula} min={new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-500 mb-1">Tarikh Tamat</label>
+                        <input required type="date" name="tarikhTamat" value={form.tarikhTamat} min={form.tarikhMula || new Date().toISOString().split('T')[0]} onChange={handleChange} className="w-full rounded-xl bg-slate-50 border-slate-200 focus:border-gray-500 focus:ring-2 focus:ring-gray-500/20 p-2.5 text-sm transition-all" />
+                      </div>
                   </div>
                 </div>
 
@@ -686,7 +715,7 @@
         const myBookings = bookings; 
         const stats = {
           total: myBookings.length, pending: myBookings.filter(b => b.status === 'Menunggu Kelulusan').length,
-          upcoming: myBookings.filter(b => b.status === 'Diluluskan' && new Date(b.tarikh) >= new Date()).length,
+          upcoming: myBookings.filter(b => b.status === 'Diluluskan' && new Date(b.tarikhMula || b.tarikh) >= new Date()).length,
           cancelled: myBookings.filter(b => b.status === 'Dibatalkan' || b.status === 'Ditolak').length
         };
 
@@ -743,7 +772,7 @@
                           <div className="text-xs text-slate-500 mt-0.5">{b.tujuan}</div>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="text-sm font-semibold text-slate-800">{b.tarikh}</div>
+                          <div className="text-sm font-semibold text-slate-800">{b.tarikhMula === b.tarikhTamat ? b.tarikhMula : `${b.tarikhMula} - ${b.tarikhTamat || ''}`}</div>
                           <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1"><i className="fas fa-clock text-xs"></i> {formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -761,12 +790,14 @@
       };
 
       const DashboardAdmin = () => {
-        const todayDate = new Date().toISOString().split('T')[0];
-        const todayBookings = bookings.filter(b => b.tarikh === todayDate);
-
+        // Tentukan todayBookings di sini
+        const todayBookings = bookings.filter(b => (b.tarikhMula || b.tarikh) === new Date().toISOString().split('T')[0]);
+        
         const stats = {
-          total: bookings.length, today: todayBookings.length,
-          pending: bookings.filter(b => b.status === 'Menunggu Kelulusan').length, approved: bookings.filter(b => b.status === 'Diluluskan').length
+          total: bookings.length, 
+          today: todayBookings.length,
+          pending: bookings.filter(b => b.status === 'Menunggu Kelulusan').length, 
+          approved: bookings.filter(b => b.status === 'Diluluskan').length
         };
 
         return (
@@ -844,7 +875,7 @@
                     <div key={b.id} className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex justify-between items-center hover:bg-white hover:shadow-md transition-all group">
                       <div>
                         <p className="font-bold text-sm text-slate-800 group-hover:text-cyan-700 transition-colors">{b.namaPemohon}</p>
-                        <p className="text-xs text-slate-500 mt-1 flex items-center gap-1"><i className="fas fa-clock text-xs"></i> {FACILITIES.find(f=>f.id===b.premis)?.name} - {b.tarikh}</p>
+                        <p className="text-xs text-slate-500 mt-1 flex items-center gap-1"><i className="fas fa-clock text-xs"></i> {FACILITIES.find(f=>f.id===b.premis)?.name} - {b.tarikhMula === b.tarikhTamat ? b.tarikhMula : `${b.tarikhMula} to ${b.tarikhTamat}`}</p>
                       </div>
                       <button onClick={()=>setView('admin-list')} className="text-xs font-bold bg-white border border-cyan-200 text-cyan-600 px-3 py-1.5 rounded-lg shadow-sm hover:bg-cyan-50">Kawal</button>
                     </div>
@@ -883,7 +914,7 @@
             return;
           }
 
-          const headers = ['ID Tempahan', 'Nama Pemohon', 'No. Telefon', 'Emel', 'Jawatan', 'Sektor/Unit', 'Premis', 'Tujuan', 'Tarikh', 'Masa Mula', 'Masa Tamat', 'Bil Peserta', 'Catatan Pemohon', 'Catatan Pentadbir'];
+          const headers = ['ID Tempahan', 'Nama Pemohon', 'No. Telefon', 'Emel', 'Jawatan', 'Sektor/Unit', 'Premis', 'Tujuan', 'Tarikh Mula', 'Tarikh Tamat', 'Masa Mula', 'Masa Tamat', 'Bil Peserta', 'Catatan Pemohon', 'Catatan Pentadbir'];
           
           const csvRows = approvedBookings.map(b => [
             b.id,
@@ -894,7 +925,8 @@
             `"${b.organisasi}"`,
             `"${FACILITIES.find(f => f.id === b.premis)?.name || b.premis}"`,
             `"${b.tujuan.replace(/"/g, '""').replace(/\n/g, ' ')}"`,
-            b.tarikh,
+            b.tarikhMula || b.tarikh,
+            b.tarikhTamat || b.tarikh,
             formatMasa(b.masaMula),
             formatMasa(b.masaTamat),
             b.bilPeserta,
@@ -954,7 +986,7 @@
                     <tr key={b.id} className="hover:bg-cyan-50/20 transition-colors">
                       <td className="px-5 py-4"><div className="font-bold text-sm text-slate-800">{b.namaPemohon}</div><div className="text-[11px] mt-0.5 text-cyan-600 font-mono font-bold bg-cyan-50 inline-block px-1.5 rounded">{b.id}</div><div className="text-xs text-slate-500 mt-1">{b.organisasi}</div></td>
                       <td className="px-5 py-4"><div className="font-bold text-sm text-slate-700">{FACILITIES.find(f=>f.id===b.premis)?.name}</div><div className="text-xs text-slate-500 mt-1 truncate max-w-[200px]" title={b.tujuan}>{b.tujuan}</div><div className="text-xs text-slate-400 mt-0.5">Kapasiti Terlibat: {b.bilPeserta} Pax</div></td>
-                      <td className="px-5 py-4"><div className="text-sm font-bold text-slate-800">{b.tarikh}</div><div className="text-xs font-medium text-slate-500 mt-1 bg-slate-100 inline-block px-2 py-0.5 rounded-md">{formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div></td>
+                      <td className="px-5 py-4"><div className="text-sm font-bold text-slate-800">{b.tarikhMula === b.tarikhTamat ? b.tarikhMula : `${b.tarikhMula} - ${b.tarikhTamat || ''}`}</div><div className="text-xs font-medium text-slate-500 mt-1 bg-slate-100 inline-block px-2 py-0.5 rounded-md">{formatMasa(b.masaMula)} - {formatMasa(b.masaTamat)}</div></td>
                       <td className="px-5 py-4 whitespace-nowrap"><span className={`px-3 py-1 inline-flex text-xs font-bold rounded-lg border ${STATUS_COLORS[b.status]}`}>{b.status}</span>{b.catatanAdmin && <div className="text-[10px] font-medium text-slate-500 mt-1.5 max-w-[120px] truncate bg-slate-50 p-1 rounded" title={b.catatanAdmin}>Notis: {b.catatanAdmin}</div>}</td>
                       <td className="px-5 py-4 whitespace-nowrap text-right text-sm font-medium">
                         {b.status === 'Menunggu Kelulusan' && (
@@ -977,8 +1009,22 @@
       };
 
       const CalendarView = () => {
-        const sortedBookings = [...bookings].filter(b => b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup').sort((a, b) => new Date(a.tarikh) - new Date(b.tarikh));
-        const grouped = sortedBookings.reduce((acc, b) => { acc[b.tarikh] = acc[b.tarikh] || []; acc[b.tarikh].push(b); return acc; }, {});
+        // Expand date ranges into individual days for the calendar view
+        const expandedBookings = [];
+        bookings.filter(b => b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan' || b.status === 'Ditutup').forEach(b => {
+             const start = new Date(b.tarikhMula || b.tarikh);
+             const end = new Date(b.tarikhTamat || b.tarikh);
+             
+             for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                 expandedBookings.push({
+                     ...b,
+                     displayDate: d.toISOString().split('T')[0]
+                 });
+             }
+        });
+
+        const sortedBookings = expandedBookings.sort((a, b) => new Date(a.displayDate) - new Date(b.displayDate));
+        const grouped = sortedBookings.reduce((acc, b) => { acc[b.displayDate] = acc[b.displayDate] || []; acc[b.displayDate].push(b); return acc; }, {});
 
         return (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 relative overflow-hidden">
