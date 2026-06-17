@@ -9,6 +9,16 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Tetapan Babel untuk mengelakkan ralat 'import' atau pragma -->
+  <script>
+    Babel.registerPreset('react-classic', {
+      presets: [
+        [Babel.availablePresets['react'], { "runtime": "classic" }]
+      ]
+    });
+  </script>
+
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
   <!-- SDK Firebase -->
@@ -25,7 +35,7 @@
 <body>
   <div id="root"></div>
 
-  <script type="text/babel">
+  <script type="text/babel" data-presets="react-classic">
     const { useState, useEffect } = React;
 
     // ==========================================
@@ -180,7 +190,8 @@
         const newStart = timeToMins(mula);
         const newEnd = timeToMins(tamat);
         return bookings.some(b => {
-          if (b.premis !== premis || b.tarikh !== tarikh) return false;
+          const bTarikh = b.tarikhMula || b.tarikh; // Semak format tarikh baharu dan lama
+          if (b.premis !== premis || bTarikh !== tarikh) return false;
           if (b.status === 'Ditolak' || b.status === 'Dibatalkan') return false;
           const bStart = timeToMins(b.masaMula);
           const bEnd = timeToMins(b.masaTamat);
@@ -194,7 +205,7 @@
           return false;
         }
 
-        if (checkOverlap(formData.premis, formData.tarikh, formData.masaMula, formData.masaTamat)) {
+        if (checkOverlap(formData.premis, formData.tarikhMula, formData.masaMula, formData.masaTamat)) {
           showDialog({ type: 'alert', title: 'Pertindihan Jadual Dikesan', message: 'RALAT: Premis tersebut telah ditempah pada slot masa tersebut. Sila ubah masa atau pilih premis lain.' });
           return false;
         }
@@ -208,11 +219,15 @@
         try {
           await db.collection("bookings").doc(newId).set(newBooking);
           addAuditLog('Tempahan Baharu', `Tempahan ${newBooking.id} direkodkan`);
-          sendTelegramMsg(`🔔 TEMPAHAN BAHARU\nNama: ${formData.namaPemohon}\nTarikh: ${formData.tarikh}\nMasa: ${formData.masaMula} - ${formData.masaTamat}\nStatus: Menunggu`);
+          
+          // Paparan tarikh dinamik untuk Telegram
+          const paparanTarikh = formData.tarikhMula === formData.tarikhTamat ? formData.tarikhMula : `${formData.tarikhMula} hingga ${formData.tarikhTamat}`;
+          
+          sendTelegramMsg(`🔔 TEMPAHAN BAHARU\nNama: ${formData.namaPemohon}\nTarikh: ${paparanTarikh}\nMasa: ${formData.masaMula} - ${formData.masaTamat}\nStatus: Menunggu`);
           
           // Hantar Notifikasi ke Bot Telegram Sebenar
           const premisName = FACILITIES.find(f=>f.id===formData.premis)?.name;
-          sendRealTelegramNotification(`🔔 <b>PERMOHONAN PREMIS BAHARU</b> 🔔\n\n<b>Pemohon:</b> ${formData.namaPemohon} (${formData.organisasi})\n<b>Premis:</b> ${premisName}\n<b>Tarikh:</b> ${formData.tarikh}\n<b>Masa:</b> ${formatMasa(formData.masaMula)} - ${formatMasa(formData.masaTamat)}\n<b>Tujuan:</b> ${formData.tujuan}\n\n<i>Sila log masuk ke sistem untuk tindakan kelulusan.</i>`);
+          sendRealTelegramNotification(`🔔 <b>PERMOHONAN PREMIS BAHARU</b> 🔔\n\n<b>Pemohon:</b> ${formData.namaPemohon} (${formData.organisasi})\n<b>Premis:</b> ${premisName}\n<b>Tarikh:</b> ${paparanTarikh}\n<b>Masa:</b> ${formatMasa(formData.masaMula)} - ${formatMasa(formData.masaTamat)}\n<b>Tujuan:</b> ${formData.tujuan}\n\n<i>Sila log masuk ke sistem untuk tindakan kelulusan.</i>`);
 
           showDialog({
             type: 'alert', title: 'Permohonan Berjaya', message: 'Tempahan anda telah disimpan ke dalam Firebase secara rasmi.',
@@ -244,8 +259,11 @@
 
               const premisName = FACILITIES.find(f => f.id === booking.premis)?.name || booking.premis;
               
+              // Paparan tarikh dinamik untuk Whatsapp
+              const paparanTarikh = booking.tarikhMula ? (booking.tarikhMula === booking.tarikhTamat ? booking.tarikhMula : `${booking.tarikhMula} hingga ${booking.tarikhTamat}`) : booking.tarikh;
+              
               // Bina ayat rasmi WhatsApp
-              const mesejWhatsApp = `*MAKLUMAN SISTEM TEMPAHAN PPD*\n\nSalam sejahtera *${booking.namaPemohon}*,\n\nDukacita dimaklumkan bahawa permohonan tempahan premis anda telah *${newStatus.toUpperCase()}*.\n\n*Butiran Tempahan:*\n🏢 Premis: ${premisName}\n📅 Tarikh: ${booking.tarikh}\n⏰ Masa: ${formatMasa(booking.masaMula)} - ${formatMasa(booking.masaTamat)}\n\n*Catatan/Alasan Pentadbir:*\n_"${catatanAdmin}"_\n\nHarap maklum, terima kasih.`;
+              const mesejWhatsApp = `*MAKLUMAN SISTEM TEMPAHAN PPD*\n\nSalam sejahtera *${booking.namaPemohon}*,\n\nDukacita dimaklumkan bahawa permohonan tempahan premis anda telah *${newStatus.toUpperCase()}*.\n\n*Butiran Tempahan:*\n🏢 Premis: ${premisName}\n📅 Tarikh: ${paparanTarikh}\n⏰ Masa: ${formatMasa(booking.masaMula)} - ${formatMasa(booking.masaTamat)}\n\n*Catatan/Alasan Pentadbir:*\n_"${catatanAdmin}"_\n\nHarap maklum, terima kasih.`;
 
               // Buka tab baharu terus ke WhatsApp pemohon
               window.open(`https://wa.me/${phone}?text=${encodeURIComponent(mesejWhatsApp)}`, '_blank');
