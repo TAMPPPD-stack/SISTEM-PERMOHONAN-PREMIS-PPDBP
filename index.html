@@ -241,7 +241,7 @@
         }
       };
 
-      const updateBookingStatus = async (id, newStatus, catatanAdmin = '') => {
+      const updateBookingStatus = async (id, newStatus, catatanAdmin = '', isUserAction = false) => {
         try {
           await db.collection("bookings").doc(id).update({
             status: newStatus,
@@ -250,7 +250,7 @@
           addAuditLog(`Kemaskini: ${newStatus}`, `ID: ${id} dikemaskini.`);
 
           // --- FUNGSI WHATSAPP KEPADA PEMOHON ---
-          if (newStatus === 'Ditolak' || newStatus === 'Dibatalkan') {
+          if ((newStatus === 'Ditolak' || newStatus === 'Dibatalkan') && !isUserAction) {
             const booking = bookings.find(b => b.id === id);
             if (booking && booking.noTelefon) {
               // Tukar format no telefon dari "012-3456789" kepada "60123456789" untuk WhatsApp
@@ -270,6 +270,15 @@
             }
           }
           // ---------------------------------------
+          
+          // --- MAKLUMAN TELEGRAM KEPADA ADMIN JIKA PEMOHON BATALKAN TEMPAHAN ---
+          if (isUserAction && newStatus === 'Dibatalkan') {
+            const booking = bookings.find(b => b.id === id);
+            if (booking) {
+              const premisName = FACILITIES.find(f => f.id === booking.premis)?.name || booking.premis;
+              sendRealTelegramNotification(`⚠️ <b>PEMBATALAN OLEH PEMOHON</b> ⚠️\n\n<b>Pemohon:</b> ${booking.namaPemohon}\n<b>Premis:</b> ${premisName}\n<b>Tarikh:</b> ${booking.tarikhMula === booking.tarikhTamat ? booking.tarikhMula : booking.tarikhMula + ' - ' + booking.tarikhTamat}\n<b>Sebab:</b> ${catatanAdmin}`);
+            }
+          }
 
         } catch (err) {
           console.error("Ralat Kemaskini Firebase:", err);
@@ -730,11 +739,21 @@
       };
 
       const DashboardUser = () => {
-        const myBookings = bookings; 
+        // Hanya paparkan tempahan milik pengguna semasa
+        const myBookings = bookings.filter(b => b.emel === currentUser.emel); 
         const stats = {
           total: myBookings.length, pending: myBookings.filter(b => b.status === 'Menunggu Kelulusan').length,
           upcoming: myBookings.filter(b => b.status === 'Diluluskan' && new Date(b.tarikhMula || b.tarikh) >= new Date()).length,
           cancelled: myBookings.filter(b => b.status === 'Dibatalkan' || b.status === 'Ditolak').length
+        };
+
+        const handleUserCancel = (id) => {
+          showDialog({
+            type: 'confirm-batal-user',
+            id: id,
+            title: 'Batalkan Tempahan',
+            message: 'Adakah anda pasti mahu membatalkan tempahan ini? Sila nyatakan sebab pembatalan di bawah:'
+          });
         };
 
         return (
@@ -779,6 +798,7 @@
                       <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Premis & Tujuan</th>
                       <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Tarikh & Slot Masa</th>
                       <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Status Terkini</th>
+                      <th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Tindakan</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-slate-50">
@@ -796,9 +816,16 @@
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`px-3 py-1 inline-flex text-xs font-bold rounded-lg border ${STATUS_COLORS[b.status]}`}>{b.status}</span>
                         </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right">
+                          {(b.status === 'Diluluskan' || b.status === 'Menunggu Kelulusan') && (
+                            <button onClick={() => handleUserCancel(b.id)} className="bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg shadow-sm transition-all font-bold text-xs">
+                              Batalkan
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
-                    {myBookings.length === 0 && <tr><td colSpan="4" className="text-center py-12 text-slate-400 font-medium">Tiada sebarang rekod ditemui.</td></tr>}
+                    {myBookings.length === 0 && <tr><td colSpan="5" className="text-center py-12 text-slate-400 font-medium">Tiada sebarang rekod ditemui.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -1236,11 +1263,11 @@
                 </h3>
                 <p className="text-slate-500 text-sm font-medium mb-6 leading-relaxed">{dialogConfig.message}</p>
                 
-                {(dialogConfig.type === 'confirm-tolak' || dialogConfig.type === 'confirm-batal') && (
+                {(dialogConfig.type === 'confirm-tolak' || dialogConfig.type === 'confirm-batal' || dialogConfig.type === 'confirm-batal-user') && (
                   <textarea 
                     autoFocus
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500 focus:outline-none transition-all text-sm" 
-                    rows="3" placeholder="Perekodan Alasan Siber..." id="reason-input"
+                    rows="3" placeholder={dialogConfig.type === 'confirm-batal-user' ? "Sebab pembatalan tempahan..." : "Perekodan Alasan Siber..."} id="reason-input"
                   ></textarea>
                 )}
 
@@ -1254,11 +1281,16 @@
                      <button onClick={closeDialog} className="px-5 py-2.5 bg-slate-800 text-white rounded-xl hover:bg-slate-700 font-bold text-sm shadow-md transition-all">Kembali</button>
                   )}
                   
-                  {(dialogConfig.type === 'confirm-tolak' || dialogConfig.type === 'confirm-batal') && (
+                  {(dialogConfig.type === 'confirm-tolak' || dialogConfig.type === 'confirm-batal' || dialogConfig.type === 'confirm-batal-user') && (
                     <button onClick={() => {
                       const reason = document.getElementById('reason-input').value;
                       if(!reason) { alert("Pengisian alasan diwajibkan oleh pangkalan data."); return; }
-                      updateBookingStatus(dialogConfig.id, dialogConfig.type === 'confirm-tolak' ? 'Ditolak' : 'Dibatalkan', reason);
+                      
+                      const isUserAction = dialogConfig.type === 'confirm-batal-user';
+                      const finalReason = isUserAction ? `Dibatalkan oleh Pemohon: ${reason}` : reason;
+                      const statusToUpdate = dialogConfig.type === 'confirm-tolak' ? 'Ditolak' : 'Dibatalkan';
+                      
+                      updateBookingStatus(dialogConfig.id, statusToUpdate, finalReason, isUserAction);
                     }} className="px-5 py-2.5 bg-rose-500 text-white rounded-xl hover:bg-rose-400 font-bold text-sm shadow-[0_4px_10px_rgba(244,63,94,0.3)] transition-all">Sahkan Perintah Eksekusi</button>
                   )}
                 </div>
